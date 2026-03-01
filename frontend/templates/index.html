@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fantasy Baseball Draft Helper</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script defer src="/static/js/app.js"></script>
+</head>
+<body>
+<div class="app-container" x-data="draftApp">
+
+    <!-- ═══ HEADER ═══ -->
+    <div class="header">
+        <h1>Fantasy Baseball Draft Helper</h1>
+        <div class="header-status">
+            <span>Round <strong x-text="currentRound"></strong></span>
+            <span>Pick <strong x-text="currentPick"></strong></span>
+            <span class="badge" :class="isMyPick ? 'badge-my-pick' : 'badge-waiting'"
+                  x-text="isMyPick ? 'YOUR PICK' : 'Waiting...'"></span>
+            <span x-show="espnPolling" class="badge badge-live">ESPN LIVE</span>
+            <span x-show="projectionsLoaded" style="color: var(--accent-green)">
+                <strong x-text="playersLoaded"></strong> players
+            </span>
+        </div>
+    </div>
+
+    <!-- ═══ LEFT PANEL: Setup / My Roster ═══ -->
+    <div class="left-panel">
+        <!-- Tab navigation -->
+        <div class="panel">
+            <div class="tabs">
+                <div class="tab" :class="activeTab === 'setup' && 'active'" @click="activeTab = 'setup'">Setup</div>
+                <div class="tab" :class="activeTab === 'draft' && 'active'" @click="activeTab = 'draft'">My Team</div>
+                <div class="tab" :class="activeTab === 'espn' && 'active'" @click="activeTab = 'espn'">ESPN</div>
+            </div>
+
+            <!-- SETUP TAB -->
+            <div class="panel-body" x-show="activeTab === 'setup'">
+                <div class="setup-section">
+                    <h3 style="font-size: 13px; margin-bottom: 10px; color: var(--text-secondary);">League Settings</h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Teams</label>
+                            <input type="number" x-model="numTeams" min="4" max="20">
+                        </div>
+                        <div class="form-group">
+                            <label>My Draft Position (0-indexed)</label>
+                            <input type="number" x-model="myTeamIdx" min="0" :max="numTeams - 1">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Rounds</label>
+                            <input type="number" x-model="numRounds" min="10" max="40">
+                        </div>
+                        <div class="form-group">
+                            <label>Draft Type</label>
+                            <select x-model="snakeDraft">
+                                <option :value="true">Snake</option>
+                                <option :value="false">Linear</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary btn-full" @click="setupLeague"
+                            :disabled="setupComplete">
+                        <span x-text="setupComplete ? 'Configured' : 'Configure League'"></span>
+                    </button>
+
+                    <!-- Projection upload -->
+                    <h3 style="font-size: 13px; margin: 14px 0 10px; color: var(--text-secondary);">Upload Projections</h3>
+                    <div class="form-group">
+                        <label>Projection System</label>
+                        <select x-model="projectionSystem">
+                            <option value="custom">Custom</option>
+                            <option value="steamer">Steamer</option>
+                            <option value="zips">ZiPS</option>
+                            <option value="atc">ATC</option>
+                            <option value="thebat">THE BAT</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Hitters CSV</label>
+                        <div class="file-upload" :class="hittersFile && 'has-file'"
+                             @click="$refs.hittersInput.click()">
+                            <span x-text="hittersFile ? hittersFile.name : 'Click to upload hitters CSV'"></span>
+                            <input type="file" accept=".csv" x-ref="hittersInput" @change="onHittersFile">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Pitchers CSV</label>
+                        <div class="file-upload" :class="pitchersFile && 'has-file'"
+                             @click="$refs.pitchersInput.click()">
+                            <span x-text="pitchersFile ? pitchersFile.name : 'Click to upload pitchers CSV'"></span>
+                            <input type="file" accept=".csv" x-ref="pitchersInput" @change="onPitchersFile">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>ADP Data CSV (optional)</label>
+                        <div class="file-upload" :class="adpFile && 'has-file'"
+                             @click="$refs.adpInput.click()">
+                            <span x-text="adpFile ? adpFile.name : 'Click to upload ADP CSV'"></span>
+                            <input type="file" accept=".csv" x-ref="adpInput" @change="onAdpFile">
+                        </div>
+                    </div>
+                    <button class="btn btn-success btn-full" @click="uploadProjections"
+                            :disabled="!setupComplete || (!hittersFile && !pitchersFile)">
+                        Upload &amp; Calculate
+                    </button>
+                </div>
+            </div>
+
+            <!-- MY TEAM TAB -->
+            <div class="panel-body" x-show="activeTab === 'draft'">
+                <!-- Category totals -->
+                <div style="padding: 8px;">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;">
+                        Team SGP: <strong style="color: var(--accent-green);" x-text="formatNum(totalSgp, 1)"></strong>
+                    </div>
+                    <div class="stat-bar">
+                        <template x-for="[cat, val] in Object.entries(categoryTotals)" :key="cat">
+                            <div class="stat-item">
+                                <div class="stat-label" x-text="cat"></div>
+                                <div class="stat-value" x-text="formatNum(val, cat === 'AVG' ? 3 : (cat === 'ERA' || cat === 'WHIP' ? 2 : 0))"></div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Roster list -->
+                <div class="roster-list">
+                    <template x-for="player in myRoster" :key="player.player_id">
+                        <div class="roster-player">
+                            <div>
+                                <span :class="posClass(player.position)" x-text="player.position"></span>
+                                <span class="player-name" x-text="player.name"></span>
+                            </div>
+                            <span class="player-sgp" x-text="formatNum(player.sgp_total)"></span>
+                        </div>
+                    </template>
+                    <div x-show="myRoster.length === 0" style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px;">
+                        No players drafted yet
+                    </div>
+                </div>
+
+                <!-- Streaming analysis button -->
+                <div style="padding: 8px;" x-show="myRoster.length > 0">
+                    <button class="btn btn-primary btn-small btn-full" @click="fetchStreamingAnalysis">
+                        Analyze SP Streaming Value
+                    </button>
+                    <div x-show="streamingAnalysis" class="streaming-card">
+                        <div class="streaming-stat">
+                            <span>SPs Rostered</span>
+                            <span x-text="streamingAnalysis?.current_sp_count || 0"></span>
+                        </div>
+                        <div class="streaming-stat">
+                            <span>Proj ERA</span>
+                            <span x-text="formatNum(streamingAnalysis?.projected_era, 2)"></span>
+                        </div>
+                        <div class="streaming-stat">
+                            <span>Proj WHIP</span>
+                            <span x-text="formatNum(streamingAnalysis?.projected_whip, 3)"></span>
+                        </div>
+                        <div class="streaming-stat">
+                            <span>Streaming SGP Benefit</span>
+                            <span class="streaming-benefit" x-text="'+' + formatNum(streamingAnalysis?.streaming_benefit_sgp, 1)"></span>
+                        </div>
+                        <div style="margin-top: 6px; font-size: 11px; color: var(--text-secondary);"
+                             x-text="streamingAnalysis?.recommendation"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ESPN TAB -->
+            <div class="panel-body" x-show="activeTab === 'espn'">
+                <div class="espn-section">
+                    <div class="espn-status">
+                        <span class="status-dot" :class="espnPolling ? 'polling' : (espnConnected ? 'connected' : 'disconnected')"></span>
+                        <span x-text="espnPolling ? 'Polling for picks...' : (espnConnected ? 'Connected: ' + espnLeagueName : 'Not connected')"></span>
+                    </div>
+
+                    <template x-if="!espnConnected">
+                        <div>
+                            <div class="form-group">
+                                <label>League ID</label>
+                                <input type="number" x-model="espnLeagueId" placeholder="e.g. 12345">
+                            </div>
+                            <div class="form-group">
+                                <label>Season</label>
+                                <input type="number" x-model="espnSeason">
+                            </div>
+                            <div class="form-group">
+                                <label>espn_s2 Cookie</label>
+                                <input type="password" x-model="espnS2" placeholder="Paste from browser DevTools">
+                            </div>
+                            <div class="form-group">
+                                <label>SWID Cookie</label>
+                                <input type="text" x-model="espnSwid" placeholder="{XXXXXXXX-XXXX-...}">
+                            </div>
+                            <button class="btn btn-primary btn-full" @click="connectEspn"
+                                    :disabled="!espnLeagueId || !espnS2 || !espnSwid">
+                                Connect to ESPN
+                            </button>
+                        </div>
+                    </template>
+
+                    <template x-if="espnConnected">
+                        <div>
+                            <div style="margin-bottom: 8px;">
+                                <button class="btn btn-full" :class="espnPolling ? 'btn-danger' : 'btn-success'"
+                                        @click="espnPolling ? stopEspnPolling() : startEspnPolling()">
+                                    <span x-text="espnPolling ? 'Stop Polling' : 'Start Live Draft Polling'"></span>
+                                </button>
+                            </div>
+                            <div style="font-size: 11px; color: var(--text-muted); padding: 8px;">
+                                Note: ESPN's API may not return picks in real-time during a live draft.
+                                You can also enter picks manually using the input below the draft board.
+                                After the draft completes, all picks will be available.
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ CENTER PANEL: Recommendations ═══ -->
+    <div class="center-panel panel">
+        <div class="panel-header">
+            <h2>Draft Recommendations</h2>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <label style="font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px;">
+                    <input type="checkbox" x-model="useMonteCarlo">
+                    Monte Carlo
+                </label>
+                <button class="btn btn-primary btn-small" @click="refreshRecommendations"
+                        :disabled="!projectionsLoaded || loadingRecs">
+                    <span x-text="loadingRecs ? 'Calculating...' : 'Refresh'"></span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Player search / manual pick -->
+        <div class="pick-input-row">
+            <input type="text" x-model="pickPlayerName"
+                   placeholder="Enter player name to record pick..."
+                   @keydown.enter="draftByName">
+            <button class="btn btn-success btn-small" @click="draftByName"
+                    :disabled="!pickPlayerName.trim()">Pick</button>
+            <button class="btn btn-warning btn-small" @click="undoPick">Undo</button>
+        </div>
+
+        <div class="panel-body">
+            <table class="rec-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Player</th>
+                        <th>Pos</th>
+                        <th>Team</th>
+                        <th>VAR</th>
+                        <th>SGP</th>
+                        <th>Score</th>
+                        <th>Avail</th>
+                        <th>Urgency</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="(rec, idx) in recommendations" :key="rec.player_id">
+                        <tr :class="idx === 0 && 'rec-top-pick'">
+                            <td style="color: var(--text-muted);" x-text="rec.rank"></td>
+                            <td>
+                                <strong x-text="rec.player_name"></strong>
+                            </td>
+                            <td><span :class="posClass(rec.position)" x-text="rec.position"></span></td>
+                            <td style="color: var(--text-secondary);" x-text="rec.team"></td>
+                            <td x-text="formatNum(rec.var)"></td>
+                            <td x-text="formatNum(rec.sgp_total)"></td>
+                            <td style="font-weight: 600;" x-text="formatNum(rec.rec_score)"></td>
+                            <td style="color: var(--text-muted);" x-text="(rec.availability_next_pick * 100).toFixed(0) + '%'"></td>
+                            <td :class="urgencyClass(rec.urgency)" x-text="rec.urgency"></td>
+                            <td>
+                                <button class="btn btn-success btn-small"
+                                        @click="draftPlayer(rec.player_id, rec.player_name)">
+                                    Draft
+                                </button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+
+            <div x-show="recommendations.length === 0 && !loadingRecs"
+                 style="padding: 40px; text-align: center; color: var(--text-muted);">
+                <div style="font-size: 14px; margin-bottom: 8px;">No recommendations yet</div>
+                <div style="font-size: 12px;">Upload projections to get started</div>
+            </div>
+            <div x-show="loadingRecs"
+                 style="padding: 40px; text-align: center; color: var(--accent-blue);">
+                Calculating recommendations...
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ RIGHT PANEL: Draft Log / Info ═══ -->
+    <div class="right-panel">
+        <div class="panel" style="flex: 1;">
+            <div class="tabs">
+                <div class="tab" :class="rightTab === 'log' && 'active'" @click="rightTab = 'log'">Draft Log</div>
+                <div class="tab" :class="rightTab === 'search' && 'active'" @click="rightTab = 'search'">Search</div>
+            </div>
+
+            <!-- Draft log -->
+            <div class="panel-body" x-show="rightTab === 'log'">
+                <div class="draft-log">
+                    <template x-for="pick in picks.slice().reverse()" :key="pick.overall_pick">
+                        <div class="draft-log-entry" :class="pick.team_idx == myTeamIdx && 'my-pick'">
+                            <span class="pick-num" x-text="(pick.overall_pick + 1)"></span>
+                            <span class="pick-team" x-text="'T' + pick.team_idx"></span>
+                            <span class="pick-player" x-text="pick.player_name"></span>
+                        </div>
+                    </template>
+                    <div x-show="picks.length === 0"
+                         style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px;">
+                        No picks yet
+                    </div>
+                </div>
+            </div>
+
+            <!-- Player search -->
+            <div class="panel-body" x-show="rightTab === 'search'" style="padding: 8px;">
+                <div class="form-group">
+                    <input type="text" x-model="searchQuery" @input.debounce.300ms="searchPlayers"
+                           placeholder="Search available players...">
+                </div>
+                <div>
+                    <template x-for="player in searchResults" :key="player.player_id">
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid rgba(51,65,85,0.3); font-size: 12px;">
+                            <div>
+                                <span :class="posClass(player.position)" x-text="player.position"></span>
+                                <strong x-text="player.name"></strong>
+                                <span style="color: var(--text-muted);" x-text="'ADP: ' + formatNum(player.adp, 0)"></span>
+                            </div>
+                            <div style="display: flex; gap: 6px; align-items: center;">
+                                <span style="color: var(--accent-green);" x-text="formatNum(player.var)"></span>
+                                <button class="btn btn-success btn-small"
+                                        @click="draftPlayer(player.player_id, player.name)">Draft</button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ TOAST NOTIFICATIONS ═══ -->
+    <div class="toast-container">
+        <template x-for="toast in toasts" :key="toast.id">
+            <div class="toast" :class="'toast-' + toast.type" x-text="toast.message"></div>
+        </template>
+    </div>
+
+</div>
+</body>
+</html>
