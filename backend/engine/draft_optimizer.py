@@ -360,11 +360,11 @@ class DraftOptimizer:
             self.player_pool.index.isin(self.my_roster)
         ] if self.player_pool is not None and self.my_roster else pd.DataFrame()
 
-        # Category totals for my team
+        # Category totals for my team (convert numpy types to native Python)
         cat_totals = {}
         for cat in self.settings.all_categories:
             if cat in my_team.columns:
-                cat_totals[cat] = round(my_team[cat].sum(), 3)
+                cat_totals[cat] = round(float(my_team[cat].sum()), 3)
 
         # Position counts
         pos_counts = {}
@@ -373,16 +373,16 @@ class DraftOptimizer:
             pos_counts[pos] = pos_counts.get(pos, 0) + 1
 
         return {
-            "current_pick": self.current_pick + 1,
-            "current_round": self.current_round,
-            "picking_team": self.picking_team,
-            "is_my_pick": self.is_my_pick,
-            "total_picks": len(self.draft_order),
-            "my_roster_size": len(self.my_roster),
-            "my_team_sgp": round(my_team["SGP_total"].sum(), 2) if "SGP_total" in my_team.columns else 0,
+            "current_pick": int(self.current_pick + 1),
+            "current_round": int(self.current_round),
+            "picking_team": int(self.picking_team),
+            "is_my_pick": bool(self.is_my_pick),
+            "total_picks": int(len(self.draft_order)),
+            "my_roster_size": int(len(self.my_roster)),
+            "my_team_sgp": round(float(my_team["SGP_total"].sum()), 2) if "SGP_total" in my_team.columns else 0,
             "category_totals": cat_totals,
             "position_counts": pos_counts,
-            "picks_remaining": len(self.my_picks_remaining),
+            "picks_remaining": int(len(self.my_picks_remaining)),
         }
 
     def _get_player_name(self, player_id: str) -> str:

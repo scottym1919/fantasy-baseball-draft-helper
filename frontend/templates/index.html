@@ -33,6 +33,7 @@
             <div class="tabs">
                 <div class="tab" :class="activeTab === 'setup' && 'active'" @click="activeTab = 'setup'">Setup</div>
                 <div class="tab" :class="activeTab === 'draft' && 'active'" @click="activeTab = 'draft'">My Team</div>
+                <div class="tab" :class="activeTab === 'keeper' && 'active'" @click="activeTab = 'keeper'">Keepers</div>
                 <div class="tab" :class="activeTab === 'espn' && 'active'" @click="activeTab = 'espn'">ESPN</div>
             </div>
 
@@ -169,6 +170,143 @@
                         <div style="margin-top: 6px; font-size: 11px; color: var(--text-secondary);"
                              x-text="streamingAnalysis?.recommendation"></div>
                     </div>
+                </div>
+            </div>
+
+            <!-- KEEPER TAB -->
+            <div class="panel-body" x-show="activeTab === 'keeper'">
+                <div class="setup-section">
+                    <!-- Tier configuration -->
+                    <h3 style="font-size: 13px; margin-bottom: 10px; color: var(--text-secondary);">Keeper Tiers</h3>
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">
+                        Define tiers with max keepers per tier. E.g., "Tier 1 (Rds 1-3)" allows 1 keeper that costs a 1st-round pick.
+                    </div>
+
+                    <!-- Existing tiers -->
+                    <template x-for="(tier, idx) in keeperTiers" :key="idx">
+                        <div style="display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid rgba(51,65,85,0.3); font-size: 12px;">
+                            <span style="flex: 1;" x-text="tier.name"></span>
+                            <span style="color: var(--text-muted);">max: <strong x-text="tier.max_keepers"></strong></span>
+                            <span x-show="tier.round_cost" style="color: var(--text-muted);">
+                                rd: <strong x-text="tier.round_cost"></strong>
+                            </span>
+                            <button class="btn btn-danger btn-small" @click="removeKeeperTier(idx)" style="padding: 1px 6px;">x</button>
+                        </div>
+                    </template>
+
+                    <!-- Add new tier -->
+                    <div style="margin-top: 8px;">
+                        <div class="form-group">
+                            <label>Tier Name</label>
+                            <input type="text" x-model="keeperTierName" placeholder="e.g. Tier 1 (Rounds 1-3)">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Max Keepers</label>
+                                <input type="number" x-model="keeperTierMax" min="1" max="10">
+                            </div>
+                            <div class="form-group">
+                                <label>Round Cost (opt)</label>
+                                <input type="number" x-model="keeperTierRoundCost" min="1" placeholder="None">
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-primary btn-small" @click="addKeeperTier"
+                                    :disabled="!keeperTierName.trim()">Add Tier</button>
+                            <button class="btn btn-success btn-small" @click="saveKeeperTiers"
+                                    :disabled="keeperTiers.length === 0">Save Tiers</button>
+                        </div>
+                    </div>
+
+                    <!-- Roster upload -->
+                    <h3 style="font-size: 13px; margin: 14px 0 8px; color: var(--text-secondary);">Keeper Roster</h3>
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">
+                        Upload a CSV with columns: name, tier (0-indexed). Optional: position, prior_round
+                    </div>
+                    <div class="form-group">
+                        <label>Team Index</label>
+                        <input type="number" x-model="keeperTeamIdx" min="0" :max="numTeams - 1">
+                    </div>
+                    <div class="form-group">
+                        <div class="file-upload" :class="keeperRosterFile && 'has-file'"
+                             @click="$refs.keeperRosterInput.click()">
+                            <span x-text="keeperRosterFile ? keeperRosterFile.name : 'Click to upload keeper roster CSV'"></span>
+                            <input type="file" accept=".csv" x-ref="keeperRosterInput" @change="onKeeperRosterFile">
+                        </div>
+                    </div>
+                    <button class="btn btn-primary btn-full btn-small" @click="uploadKeeperRoster"
+                            :disabled="!keeperRosterFile || keeperTiers.length === 0">
+                        Upload Roster
+                    </button>
+
+                    <!-- Candidates & Optimization -->
+                    <template x-if="keeperCandidates.length > 0">
+                        <div style="margin-top: 12px;">
+                            <h3 style="font-size: 13px; margin-bottom: 8px; color: var(--text-secondary);">Keeper Candidates</h3>
+                            <div style="max-height: 200px; overflow-y: auto;">
+                                <template x-for="c in keeperCandidates" :key="c.player_id">
+                                    <div style="display: flex; justify-content: space-between; padding: 3px 4px; border-bottom: 1px solid rgba(51,65,85,0.3); font-size: 11px;">
+                                        <div>
+                                            <span :class="posClass(c.position)" x-text="c.position"></span>
+                                            <strong x-text="c.player_name"></strong>
+                                            <span style="color: var(--text-muted);" x-text="'[' + c.tier_name + ']'"></span>
+                                        </div>
+                                        <div style="display: flex; gap: 8px;">
+                                            <span style="color: var(--text-secondary);" x-text="'VAR ' + formatNum(c.var)"></span>
+                                            <span :style="c.keeper_value >= 0 ? 'color: var(--accent-green)' : 'color: var(--accent-red)'"
+                                                  x-text="'Val ' + formatNum(c.keeper_value)"></span>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+
+                            <!-- Optimize button -->
+                            <div style="margin-top: 8px;">
+                                <div class="form-group">
+                                    <label>Max Total Keepers (optional)</label>
+                                    <input type="number" x-model="keeperMaxTotal" min="1" placeholder="No limit">
+                                </div>
+                                <button class="btn btn-success btn-full" @click="optimizeKeepers">
+                                    Find Optimal Keepers
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Recommendation result -->
+                    <template x-if="keeperRecommendation">
+                        <div style="margin-top: 12px; padding: 10px; background: var(--bg-primary); border-radius: 6px;">
+                            <h3 style="font-size: 13px; margin-bottom: 6px; color: var(--accent-green);">Recommended Keepers</h3>
+                            <template x-for="p in keeperRecommendation.kept_players" :key="p.player_id">
+                                <div style="display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px;">
+                                    <div>
+                                        <span :class="posClass(p.position)" x-text="p.position"></span>
+                                        <strong x-text="p.player_name"></strong>
+                                    </div>
+                                    <div style="display: flex; gap: 8px;">
+                                        <span style="color: var(--text-muted);" x-text="p.tier_name"></span>
+                                        <span style="color: var(--accent-green);" x-text="'Val ' + formatNum(p.keeper_value)"></span>
+                                    </div>
+                                </div>
+                            </template>
+                            <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border-color); font-size: 12px;">
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span style="color: var(--text-secondary);">Total SGP</span>
+                                    <strong style="color: var(--accent-green);" x-text="formatNum(keeperRecommendation.total_sgp)"></strong>
+                                </div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span style="color: var(--text-secondary);">Net Keeper Value</span>
+                                    <strong x-text="formatNum(keeperRecommendation.total_keeper_value)"></strong>
+                                </div>
+                            </div>
+                            <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);"
+                                 x-text="keeperRecommendation.explanation"></div>
+                            <button class="btn btn-warning btn-full" style="margin-top: 8px;"
+                                    @click="applyKeepers" :disabled="keeperApplied">
+                                <span x-text="keeperApplied ? 'Keepers Applied' : 'Apply Keepers to Draft'"></span>
+                            </button>
+                        </div>
+                    </template>
                 </div>
             </div>
 

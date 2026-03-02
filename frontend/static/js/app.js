@@ -49,6 +49,18 @@ document.addEventListener("alpine:init", () => {
         // Streaming analysis
         streamingAnalysis: null,
 
+        // Keeper assistant
+        keeperTiers: [],
+        keeperTierName: "",
+        keeperTierMax: 1,
+        keeperTierRoundCost: "",
+        keeperRosterFile: null,
+        keeperTeamIdx: 0,
+        keeperCandidates: [],
+        keeperRecommendation: null,
+        keeperMaxTotal: "",
+        keeperApplied: false,
+
         // Player search
         searchQuery: "",
         searchResults: [],
@@ -381,6 +393,137 @@ document.addEventListener("alpine:init", () => {
                 }
             } catch (e) {
                 console.error("Search error:", e);
+            }
+        },
+
+        // ── Keeper Assistant ─────────────────────────────────────
+        addKeeperTier() {
+            if (!this.keeperTierName.trim()) return;
+            this.keeperTiers.push({
+                name: this.keeperTierName,
+                max_keepers: parseInt(this.keeperTierMax) || 1,
+                round_cost: this.keeperTierRoundCost ? parseInt(this.keeperTierRoundCost) : null,
+            });
+            this.keeperTierName = "";
+            this.keeperTierMax = 1;
+            this.keeperTierRoundCost = "";
+        },
+
+        removeKeeperTier(idx) {
+            this.keeperTiers.splice(idx, 1);
+        },
+
+        async saveKeeperTiers() {
+            if (!this.setupComplete) {
+                this.showToast("Configure league settings first", "error");
+                return;
+            }
+            try {
+                const resp = await fetch("/api/keeper/tiers", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ tiers: this.keeperTiers }),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    this.showToast(`Saved ${this.keeperTiers.length} keeper tiers`, "success");
+                } else {
+                    this.showToast(data.detail || "Failed to save tiers", "error");
+                }
+            } catch (e) {
+                this.showToast("Tier save error: " + e.message, "error");
+            }
+        },
+
+        onKeeperRosterFile(event) {
+            this.keeperRosterFile = event.target.files[0];
+        },
+
+        async uploadKeeperRoster() {
+            if (!this.keeperRosterFile) return;
+            const formData = new FormData();
+            formData.append("roster_file", this.keeperRosterFile);
+            formData.append("team_idx", this.keeperTeamIdx.toString());
+
+            try {
+                const resp = await fetch("/api/keeper/roster/upload", {
+                    method: "POST",
+                    body: formData,
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    this.showToast(`Loaded ${data.players_loaded} players for keeper eval`, "success");
+                    this.fetchKeeperCandidates();
+                } else {
+                    this.showToast(data.detail || "Roster upload failed", "error");
+                }
+            } catch (e) {
+                this.showToast("Upload error: " + e.message, "error");
+            }
+        },
+
+        async fetchKeeperCandidates() {
+            try {
+                const resp = await fetch(`/api/keeper/candidates?team_idx=${this.keeperTeamIdx}`);
+                const data = await resp.json();
+                if (resp.ok) {
+                    this.keeperCandidates = data.candidates;
+                } else {
+                    this.showToast(data.detail || "Failed to load candidates", "error");
+                }
+            } catch (e) {
+                this.showToast("Candidates error: " + e.message, "error");
+            }
+        },
+
+        async optimizeKeepers() {
+            try {
+                const body = {
+                    team_idx: parseInt(this.keeperTeamIdx),
+                };
+                if (this.keeperMaxTotal) {
+                    body.max_total_keepers = parseInt(this.keeperMaxTotal);
+                }
+                const resp = await fetch("/api/keeper/optimize", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    this.keeperRecommendation = data;
+                    this.showToast("Keeper optimization complete", "success");
+                } else {
+                    this.showToast(data.detail || "Optimization failed", "error");
+                }
+            } catch (e) {
+                this.showToast("Optimize error: " + e.message, "error");
+            }
+        },
+
+        async applyKeepers() {
+            if (!this.keeperRecommendation) return;
+            const keepers = {};
+            const playerIds = this.keeperRecommendation.kept_players.map(p => p.player_id);
+            keepers[this.keeperTeamIdx.toString()] = playerIds;
+
+            try {
+                const resp = await fetch("/api/keeper/apply", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ keepers }),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    this.keeperApplied = true;
+                    this.showToast(`Applied ${data.keepers_applied} keepers to draft`, "success");
+                    this.refreshDraftState();
+                    this.refreshRecommendations();
+                } else {
+                    this.showToast(data.detail || "Apply failed", "error");
+                }
+            } catch (e) {
+                this.showToast("Apply error: " + e.message, "error");
             }
         },
 
